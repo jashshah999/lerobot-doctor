@@ -6,6 +6,8 @@ Catches issues that waste debugging time: corrupted timestamps, dropped frames, 
 
 Works on local datasets and HuggingFace Hub datasets. No dependency on the lerobot package.
 
+**Live now** on the [LeRobot Dataset Visualizer](https://huggingface.co/spaces/lerobot/visualize_dataset) as the "Doctor" tab, and as a standalone [HF Space](https://huggingface.co/spaces/jashshah999/lerobot-doctor).
+
 ## Install
 
 ```bash
@@ -40,9 +42,15 @@ lerobot-doctor /path/to/dataset --max-episodes 10
 
 # Verbose (show PASS details)
 lerobot-doctor /path/to/dataset -v
+
+# CI mode: JSON output, exits 1 on failures
+lerobot-doctor /path/to/dataset --ci
+
+# CI mode: exits 1 on warnings too
+lerobot-doctor /path/to/dataset --ci --fail-on=warn
 ```
 
-## Checks (10 total)
+## Checks (11 total)
 
 | Check | What it catches |
 |-------|----------------|
@@ -56,6 +64,7 @@ lerobot-doctor /path/to/dataset -v
 | **training** | Policy compatibility (ACT/Diffusion/VLA), normalization readiness (zero-std dims), action space sanity, delta_timestamps compatibility |
 | **anomalies** | Stuck actuators (>80% static), near-duplicate episodes, distribution shift across dataset, broken sensors (constant observations) |
 | **portability** | Absolute paths, symlinks, large files, HF Hub compatibility, non-standard files |
+| **per_episode** | Per-episode drilldown: flags specific bad episodes with reasons (short, frozen, NaN, timestamp gaps, action jumps) |
 
 ## Exit codes
 
@@ -92,9 +101,28 @@ Suggested fixes:
   Filter episodes shorter than your policy's chunk_size before training
 ```
 
+## CI / GitHub Actions
+
+Use `--ci` for pipeline integration. Outputs JSON to stdout, one-line summary to stderr.
+
+```bash
+# Fail pipeline on any FAIL
+lerobot-doctor lerobot/pusht --ci
+
+# Fail pipeline on WARNs too (stricter)
+lerobot-doctor lerobot/pusht --ci --fail-on=warn
+```
+
+Example GitHub Actions step:
+
+```yaml
+- name: Dataset quality gate
+  run: lerobot-doctor my-org/my-dataset --ci --fail-on=warn
+```
+
 ## JSON output
 
-Use `--json` for CI integration. Exit code 1 on any FAIL.
+Use `--json` for JSON output without CI exit-code behavior.
 
 ```bash
 lerobot-doctor /path/to/dataset --json | jq '.overall_severity'

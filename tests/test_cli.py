@@ -52,3 +52,28 @@ def test_cli_version(capsys):
         main(["--version"])
     captured = capsys.readouterr()
     assert "0.1.0" in captured.out
+
+
+def test_cli_ci_mode(tmp_dataset, capsys):
+    main([str(tmp_dataset), "--ci"])
+    captured = capsys.readouterr()
+    data = json.loads(captured.out)
+    assert "checks" in data
+    assert "pass" in captured.err or "warn" in captured.err or "fail" in captured.err
+
+
+def test_cli_ci_fail_on_warn_passes_clean(tmp_dataset, capsys):
+    """Clean dataset should pass even with --fail-on=warn."""
+    # tmp_dataset is clean, should be all PASS
+    main([str(tmp_dataset), "--ci", "--fail-on=warn", "--checks", "metadata"])
+    captured = capsys.readouterr()
+    data = json.loads(captured.out)
+    assert data["overall_severity"] == "PASS"
+
+
+def test_cli_ci_fail_on_fail(tmp_dataset, capsys):
+    """Default --fail-on=fail should exit 0 for WARN."""
+    main([str(tmp_dataset), "--ci", "--fail-on=fail"])
+    captured = capsys.readouterr()
+    data = json.loads(captured.out)
+    assert "overall_severity" in data

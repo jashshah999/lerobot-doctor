@@ -10,7 +10,7 @@ from tests.conftest import create_dataset
 def test_run_all_checks(tmp_dataset):
     ds = load_local(tmp_dataset)
     report = run_checks(ds)
-    assert len(report.results) == 10
+    assert len(report.results) == 11
     assert all(isinstance(r, CheckResult) for r in report.results)
 
 

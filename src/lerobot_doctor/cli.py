@@ -23,7 +23,7 @@ def main(argv: list[str] | None = None):
         default=None,
         help="Comma-separated list of checks to run (default: all). "
              "Available: metadata,temporal,actions,videos,statistics,"
-             "episodes,consistency,training,anomalies",
+             "episodes,consistency,training,anomalies,portability,per_episode",
     )
     parser.add_argument(
         "--max-episodes",
@@ -41,6 +41,17 @@ def main(argv: list[str] | None = None):
         "-v", "--verbose",
         action="store_true",
         help="Show all messages including PASS details",
+    )
+    parser.add_argument(
+        "--ci",
+        action="store_true",
+        help="CI mode: JSON output, one-line summary to stderr, exit code based on --fail-on",
+    )
+    parser.add_argument(
+        "--fail-on",
+        choices=["warn", "fail"],
+        default="fail",
+        help="Minimum severity that triggers exit code 1 (default: fail). Only used with --ci",
     )
     parser.add_argument(
         "--version",
@@ -70,13 +81,23 @@ def main(argv: list[str] | None = None):
     report = run_checks(dataset, checks=check_names, verbose=args.verbose)
 
     # Output
-    if args.json_output:
+    if args.ci:
+        print(report_to_json(report))
+        counts = report.summary_counts
+        summary = f"lerobot-doctor: {counts['PASS']} pass, {counts['WARN']} warn, {counts['FAIL']} fail"
+        print(summary, file=sys.stderr)
+        threshold = args.fail_on.upper()
+        if threshold == "WARN" and report.overall_severity.value in ("WARN", "FAIL"):
+            sys.exit(1)
+        elif threshold == "FAIL" and report.overall_severity.value == "FAIL":
+            sys.exit(1)
+    elif args.json_output:
         print(report_to_json(report))
     else:
         print_report(report, verbose=args.verbose)
 
-    # Exit code: 0 for PASS/WARN, 1 for FAIL
-    if report.overall_severity.value == "FAIL":
+    # Exit code: 0 for PASS/WARN, 1 for FAIL (non-CI mode)
+    if not args.ci and report.overall_severity.value == "FAIL":
         sys.exit(1)
 
 
