@@ -37,8 +37,8 @@ lerobot-doctor /path/to/dataset --checks metadata,temporal,actions
 # JSON output (for CI/CD integration)
 lerobot-doctor /path/to/dataset --json
 
-# Limit episodes checked (for large datasets)
-lerobot-doctor /path/to/dataset --max-episodes 10
+# Limit episodes checked (recommended for huge HF datasets like lerobot/droid_1.0.1)
+lerobot-doctor lerobot/droid_1.0.1 --max-episodes 10
 
 # Verbose (show PASS details)
 lerobot-doctor /path/to/dataset -v
@@ -93,8 +93,11 @@ Episodes: 206 | Frames: 25,650 | FPS: 10
 [PASS] Training Readiness
 [WARN] Anomaly Detection
   - next.success: ALL 1 dimensions constant across ALL episodes
+[WARN] Per-Episode Drilldown
+  - Episode 2: 1 sudden action jumps
+  - Episode 3: 2 sudden action jumps
 
-Summary: 5 PASS | 5 WARN
+Summary: 5 PASS | 6 WARN
 
 Suggested fixes:
   Check sensor connections -- constant readings indicate hardware issues
