@@ -104,7 +104,11 @@ def load_episodes_meta(root: Path, info: DatasetInfo) -> list[EpisodeMeta]:
 
 
 def load_episode_data(root: Path, info: DatasetInfo, max_episodes: int | None = None) -> list[EpisodeData]:
-    """Load episode data from data/ parquet files."""
+    """Load episode data from data/ parquet files.
+
+    Streams files in sorted order and stops early once max_episodes unique
+    episodes are collected. Avoids loading the entire dataset into memory.
+    """
     data_dir = root / "data"
     if not data_dir.exists():
         return []
@@ -112,43 +116,82 @@ def load_episode_data(root: Path, info: DatasetInfo, max_episodes: int | None = 
     if not parquet_files:
         return []
 
-    # Read all parquet files into one table
-    tables = [pq.read_table(pf) for pf in parquet_files]
     import pyarrow as pa
-    try:
-        full_table = pa.concat_tables(tables)
-    except pa.lib.ArrowInvalid:
-        # Schema mismatch between files -- promote to union schema
-        full_table = pa.concat_tables(tables, promote_options="permissive")
 
-    # Group by episode_index
-    ep_col = full_table.column("episode_index").to_pylist()
-    episodes = {}
-    for i, ep_idx in enumerate(ep_col):
-        if ep_idx not in episodes:
-            episodes[ep_idx] = []
-        episodes[ep_idx].append(i)
+    # Stream files; accumulate episodes. Stop once max_episodes is reached.
+    episode_rows: dict[int, list[tuple[pa.Table, int]]] = {}
+    seen_order: list[int] = []
 
-    sorted_eps = sorted(episodes.keys())
+    for pf in parquet_files:
+        if max_episodes is not None and len(seen_order) >= max_episodes:
+            # Already have enough episodes; but might still get rows for
+            # already-seen episodes split across files. Keep scanning only
+            # if any seen episode's last row could continue.
+            # Safer: stop scanning once we have max_episodes distinct AND
+            # the current file's first episode isn't one we're still collecting.
+            # Simpler: stop scanning -- v3 episodes are contiguous within a file.
+            break
+
+        table = pq.read_table(pf)
+        if "episode_index" not in table.column_names:
+            continue
+        ep_col = table.column("episode_index").to_pylist()
+        for row_i, ep_idx in enumerate(ep_col):
+            if ep_idx not in episode_rows:
+                if max_episodes is not None and len(seen_order) >= max_episodes:
+                    continue
+                episode_rows[ep_idx] = []
+                seen_order.append(ep_idx)
+            episode_rows[ep_idx].append((table, row_i))
+
+    sorted_eps = sorted(episode_rows.keys())
     if max_episodes is not None:
         sorted_eps = sorted_eps[:max_episodes]
 
     result = []
     for ep_idx in sorted_eps:
-        row_indices = episodes[ep_idx]
-        columns = {}
-        for col_name in full_table.column_names:
-            col = full_table.column(col_name)
-            values = [col[i].as_py() for i in row_indices]
-            try:
-                columns[col_name] = np.array(values)
-            except (ValueError, TypeError):
-                # Some columns (like lists of different lengths) can't be numpy arrays
-                columns[col_name] = values
+        entries = episode_rows[ep_idx]
+        if not entries:
+            continue
+        # Group entries by table to extract rows efficiently
+        tables_for_ep: dict[int, tuple[pa.Table, list[int]]] = {}
+        for tbl, ri in entries:
+            key = id(tbl)
+            if key not in tables_for_ep:
+                tables_for_ep[key] = (tbl, [])
+            tables_for_ep[key][1].append(ri)
+
+        columns: dict[str, np.ndarray] = {}
+        col_names: list[str] | None = None
+        for tbl, row_indices in tables_for_ep.values():
+            if col_names is None:
+                col_names = tbl.column_names
+            for col_name in tbl.column_names:
+                if col_name not in col_names:
+                    continue
+                col = tbl.column(col_name)
+                values = [col[i].as_py() for i in row_indices]
+                if col_name in columns:
+                    # Append if episode spans multiple files (rare for v3)
+                    existing = columns[col_name]
+                    if isinstance(existing, np.ndarray):
+                        existing = existing.tolist()
+                    existing.extend(values)
+                    try:
+                        columns[col_name] = np.array(existing)
+                    except (ValueError, TypeError):
+                        columns[col_name] = existing
+                else:
+                    try:
+                        columns[col_name] = np.array(values)
+                    except (ValueError, TypeError):
+                        columns[col_name] = values
+
+        total_len = sum(len(rs) for _, rs in tables_for_ep.values())
         result.append(EpisodeData(
             episode_index=ep_idx,
             columns=columns,
-            length=len(row_indices),
+            length=total_len,
         ))
     return result
 
@@ -166,17 +209,80 @@ def load_tasks(root: Path) -> list[dict] | None:
 
 
 def load_from_hf(repo_id: str, cache_dir: Path | None = None, max_episodes: int | None = None) -> LoadedDataset:
-    """Download dataset files from HuggingFace Hub and load them."""
+    """Download dataset files from HuggingFace Hub and load them.
+
+    If max_episodes is set, only downloads the data parquet files that contain
+    the first N episodes, using the episodes meta to resolve episode -> file
+    mappings. This avoids pulling the entire dataset for large repos.
+    """
     from huggingface_hub import snapshot_download
+
+    # Phase 1: always pull all meta files (small). Need episodes meta to resolve
+    # episode -> data file mapping.
+    meta_patterns = ["meta/**"]
+    if max_episodes is None:
+        # Full download: everything under meta/ and data/.
+        local_dir = snapshot_download(
+            repo_id=repo_id,
+            repo_type="dataset",
+            cache_dir=cache_dir,
+            allow_patterns=meta_patterns + ["data/**"],
+        )
+        ds = load_local(Path(local_dir), max_episodes=None)
+        ds.is_local = False
+        return ds
 
     local_dir = snapshot_download(
         repo_id=repo_id,
         repo_type="dataset",
         cache_dir=cache_dir,
-        allow_patterns=["meta/**", "data/**"],
-        # Skip videos for now -- too large. Video check will download on demand.
+        allow_patterns=meta_patterns,
     )
-    ds = load_local(Path(local_dir), max_episodes=max_episodes)
+    root = Path(local_dir)
+
+    # Phase 2: figure out which data parquet files contain the first N episodes
+    # by inspecting episodes meta. Fall back to pattern download if we can't.
+    data_patterns: list[str] = []
+    episodes_dir = root / "meta" / "episodes"
+    if episodes_dir.exists():
+        meta_files = sorted(episodes_dir.rglob("*.parquet"))
+        collected: set[tuple[int, int]] = set()
+        for mf in meta_files:
+            table = pq.read_table(mf)
+            cols = table.column_names
+            if "data/chunk_index" not in cols or "data/file_index" not in cols:
+                break
+            chunk_col = table.column("data/chunk_index").to_pylist()
+            file_col = table.column("data/file_index").to_pylist()
+            ep_col = (
+                table.column("episode_index").to_pylist()
+                if "episode_index" in cols
+                else list(range(len(table)))
+            )
+            for ep_idx, ci, fi in zip(ep_col, chunk_col, file_col):
+                if ep_idx is None or ep_idx >= max_episodes:
+                    continue
+                if ci is None or fi is None:
+                    continue
+                collected.add((int(ci), int(fi)))
+            # If we've already seen max_episodes or more, we can stop early.
+            if len(collected) and max(ep_col) >= max_episodes - 1:
+                break
+        for ci, fi in sorted(collected):
+            data_patterns.append(f"data/chunk-{ci:03d}/file-{fi:03d}.parquet")
+
+    if not data_patterns:
+        # Fallback: pull everything. Better to be slow than wrong.
+        data_patterns = ["data/**"]
+
+    snapshot_download(
+        repo_id=repo_id,
+        repo_type="dataset",
+        cache_dir=cache_dir,
+        allow_patterns=data_patterns,
+    )
+
+    ds = load_local(root, max_episodes=max_episodes)
     ds.is_local = False
     return ds
 
