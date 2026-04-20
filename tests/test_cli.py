@@ -71,6 +71,15 @@ def test_cli_ci_fail_on_warn_passes_clean(tmp_dataset, capsys):
     assert data["overall_severity"] == "PASS"
 
 
+def test_cli_markdown_output(tmp_dataset, tmp_path, capsys):
+    out = tmp_path / "report.md"
+    main([str(tmp_dataset), "--markdown", str(out)])
+    assert out.exists()
+    text = out.read_text()
+    assert "# lerobot-doctor report" in text
+    assert "| Check | Severity | Messages |" in text
+
+
 def test_cli_ci_fail_on_fail(tmp_dataset, capsys):
     """Default --fail-on=fail should exit 0 for WARN."""
     main([str(tmp_dataset), "--ci", "--fail-on=fail"])

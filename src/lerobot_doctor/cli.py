@@ -54,6 +54,13 @@ def main(argv: list[str] | None = None):
         help="Minimum severity that triggers exit code 1 (default: fail). Only used with --ci",
     )
     parser.add_argument(
+        "--markdown",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="Also write a markdown report to PATH (good for PRs and dataset cards)",
+    )
+    parser.add_argument(
         "--version",
         action="version",
         version=f"lerobot-doctor {__version__}",
@@ -69,7 +76,7 @@ def main(argv: list[str] | None = None):
     # Load dataset
     from lerobot_doctor.dataset_loader import load_dataset
     from lerobot_doctor.runner import run_checks
-    from lerobot_doctor.report import print_report, report_to_json
+    from lerobot_doctor.report import print_report, report_to_json, report_to_markdown
 
     try:
         dataset = load_dataset(args.dataset, max_episodes=args.max_episodes)
@@ -95,6 +102,11 @@ def main(argv: list[str] | None = None):
         print(report_to_json(report))
     else:
         print_report(report, verbose=args.verbose)
+
+    if args.markdown:
+        from pathlib import Path
+        Path(args.markdown).write_text(report_to_markdown(report))
+        print(f"Wrote markdown report to {args.markdown}", file=sys.stderr)
 
     # Exit code: 0 for PASS/WARN, 1 for FAIL (non-CI mode)
     if not args.ci and report.overall_severity.value == "FAIL":

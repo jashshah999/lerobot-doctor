@@ -37,6 +37,9 @@ lerobot-doctor /path/to/dataset --checks metadata,temporal,actions
 # JSON output (for CI/CD integration)
 lerobot-doctor /path/to/dataset --json
 
+# Markdown report (paste into PRs or dataset cards)
+lerobot-doctor /path/to/dataset --markdown report.md
+
 # Limit episodes checked (recommended for huge HF datasets like lerobot/droid_1.0.1)
 lerobot-doctor lerobot/droid_1.0.1 --max-episodes 10
 
