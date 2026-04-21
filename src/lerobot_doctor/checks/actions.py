@@ -138,12 +138,14 @@ def _check_action_column(dataset: LoadedDataset, col_name: str, result: CheckRes
         # Check for consecutive identical rows
         same_as_prev = np.all(vals[1:] == vals[:-1], axis=-1) if vals.ndim > 1 else (vals[1:] == vals[:-1]).flatten()
         max_run = _max_consecutive_true(same_as_prev)
+        ep_len = len(vals)
         if max_run >= 10:
-            frozen_episodes.append((ep.episode_index, max_run))
+            pct = max_run / ep_len * 100 if ep_len > 0 else 0
+            frozen_episodes.append((ep.episode_index, pct))
 
     if frozen_episodes:
-        for ep_idx, run_len in frozen_episodes[:5]:
-            result.warn(f"{col_name}: Episode {ep_idx} has {run_len} consecutive identical actions (frozen)")
+        for ep_idx, pct in frozen_episodes[:5]:
+            result.warn(f"{col_name}: {pct:.0f}% of episode {ep_idx} is consecutive identical actions (frozen)")
         if len(frozen_episodes) > 5:
             result.warn(f"{col_name}: ...and {len(frozen_episodes) - 5} more episodes with frozen actions")
 

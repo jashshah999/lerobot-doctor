@@ -129,7 +129,8 @@ def check_per_episode(dataset: LoadedDataset) -> CheckResult:
             same = np.all(vals_2d[1:] == vals_2d[:-1], axis=-1)
             max_run = _max_consecutive_true(same)
             if max_run >= 10:
-                reasons.append(f"frozen {col_name} ({max_run} identical steps)")
+                pct = max_run / len(vals) * 100 if len(vals) > 0 else 0
+                reasons.append(f"{pct:.0f}% of {col_name} frozen (consecutive identical)")
 
             # Action jumps
             if col_name in global_diff_std and len(vals) >= 3:
