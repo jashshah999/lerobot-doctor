@@ -211,76 +211,114 @@ def load_tasks(root: Path) -> list[dict] | None:
 def load_from_hf(repo_id: str, cache_dir: Path | None = None, max_episodes: int | None = None) -> LoadedDataset:
     """Download dataset files from HuggingFace Hub and load them.
 
-    If max_episodes is set, only downloads the data parquet files that contain
-    the first N episodes, using the episodes meta to resolve episode -> file
-    mappings. This avoids pulling the entire dataset for large repos.
+    If max_episodes is set, downloads meta files incrementally and only pulls
+    the data parquet files that contain the first N episodes. Avoids pulling
+    hundreds of GB for repos like lerobot/droid_1.0.1.
     """
-    from huggingface_hub import snapshot_download
+    from huggingface_hub import HfApi, hf_hub_download, snapshot_download
 
-    # Phase 1: always pull all meta files (small). Need episodes meta to resolve
-    # episode -> data file mapping.
-    meta_patterns = ["meta/**"]
     if max_episodes is None:
         # Full download: everything under meta/ and data/.
         local_dir = snapshot_download(
             repo_id=repo_id,
             repo_type="dataset",
             cache_dir=cache_dir,
-            allow_patterns=meta_patterns + ["data/**"],
+            allow_patterns=["meta/**", "data/**"],
         )
         ds = load_local(Path(local_dir), max_episodes=None)
         ds.is_local = False
         return ds
 
-    local_dir = snapshot_download(
-        repo_id=repo_id,
-        repo_type="dataset",
-        cache_dir=cache_dir,
-        allow_patterns=meta_patterns,
-    )
-    root = Path(local_dir)
+    # List repo files once so we know what meta/episodes parquets exist.
+    api = HfApi()
+    try:
+        all_files = api.list_repo_files(repo_id, repo_type="dataset")
+    except Exception:
+        all_files = []
 
-    # Phase 2: figure out which data parquet files contain the first N episodes
-    # by inspecting episodes meta. Fall back to pattern download if we can't.
-    data_patterns: list[str] = []
-    episodes_dir = root / "meta" / "episodes"
-    if episodes_dir.exists():
-        meta_files = sorted(episodes_dir.rglob("*.parquet"))
-        collected: set[tuple[int, int]] = set()
-        for mf in meta_files:
-            table = pq.read_table(mf)
-            cols = table.column_names
-            if "data/chunk_index" not in cols or "data/file_index" not in cols:
-                break
-            chunk_col = table.column("data/chunk_index").to_pylist()
-            file_col = table.column("data/file_index").to_pylist()
-            ep_col = (
-                table.column("episode_index").to_pylist()
-                if "episode_index" in cols
-                else list(range(len(table)))
-            )
-            for ep_idx, ci, fi in zip(ep_col, chunk_col, file_col):
-                if ep_idx is None or ep_idx >= max_episodes:
-                    continue
-                if ci is None or fi is None:
-                    continue
+    root: Path | None = None
+
+    def _download(relpath: str) -> Path:
+        nonlocal root
+        p = Path(hf_hub_download(
+            repo_id=repo_id,
+            repo_type="dataset",
+            filename=relpath,
+            cache_dir=cache_dir,
+        ))
+        if root is None:
+            # hf_hub_download returns snapshot/<relpath>; strip to get root.
+            root = p
+            for _ in Path(relpath).parts:
+                root = root.parent
+        return p
+
+    # Phase 1: download small meta files (info, tasks, stats).
+    small_meta = [f for f in all_files if f.startswith("meta/") and not f.startswith("meta/episodes/")]
+    for f in small_meta:
+        try:
+            _download(f)
+        except Exception:
+            pass
+
+    if root is None:
+        # Couldn't download anything; fall back to full snapshot.
+        local_dir = snapshot_download(
+            repo_id=repo_id,
+            repo_type="dataset",
+            cache_dir=cache_dir,
+            allow_patterns=["meta/**", "data/**"],
+        )
+        ds = load_local(Path(local_dir), max_episodes=max_episodes)
+        ds.is_local = False
+        return ds
+
+    # Phase 2: download episodes meta files incrementally until we've covered
+    # the first max_episodes episodes. Collect (chunk, file) of data parquets
+    # needed along the way.
+    episodes_meta_files = sorted(f for f in all_files if f.startswith("meta/episodes/") and f.endswith(".parquet"))
+    collected: set[tuple[int, int]] = set()
+    seen_episode_indices: set[int] = set()
+
+    for mf_rel in episodes_meta_files:
+        local_path = _download(mf_rel)
+        table = pq.read_table(local_path)
+        cols = table.column_names
+        ep_col = (
+            table.column("episode_index").to_pylist()
+            if "episode_index" in cols
+            else list(range(len(table)))
+        )
+        have_mapping = "data/chunk_index" in cols and "data/file_index" in cols
+        chunk_col = table.column("data/chunk_index").to_pylist() if have_mapping else [None] * len(table)
+        file_col = table.column("data/file_index").to_pylist() if have_mapping else [None] * len(table)
+
+        for ep_idx, ci, fi in zip(ep_col, chunk_col, file_col):
+            if ep_idx is None or ep_idx >= max_episodes:
+                continue
+            seen_episode_indices.add(int(ep_idx))
+            if ci is not None and fi is not None:
                 collected.add((int(ci), int(fi)))
-            # If we've already seen max_episodes or more, we can stop early.
-            if len(collected) and max(ep_col) >= max_episodes - 1:
-                break
+
+        # Stop once we've covered episodes 0..max_episodes-1.
+        if seen_episode_indices and max(seen_episode_indices) >= max_episodes - 1:
+            break
+
+    # Phase 3: download the data parquet files that actually contain our episodes.
+    if collected:
         for ci, fi in sorted(collected):
-            data_patterns.append(f"data/chunk-{ci:03d}/file-{fi:03d}.parquet")
-
-    if not data_patterns:
-        # Fallback: pull everything. Better to be slow than wrong.
-        data_patterns = ["data/**"]
-
-    snapshot_download(
-        repo_id=repo_id,
-        repo_type="dataset",
-        cache_dir=cache_dir,
-        allow_patterns=data_patterns,
-    )
+            try:
+                _download(f"data/chunk-{ci:03d}/file-{fi:03d}.parquet")
+            except Exception:
+                pass
+    else:
+        # No mapping columns; fall back to a bounded pattern download.
+        snapshot_download(
+            repo_id=repo_id,
+            repo_type="dataset",
+            cache_dir=cache_dir,
+            allow_patterns=["data/chunk-000/*.parquet"],
+        )
 
     ds = load_local(root, max_episodes=max_episodes)
     ds.is_local = False
