@@ -134,6 +134,23 @@ Use `--json` for JSON output without CI exit-code behavior.
 lerobot-doctor /path/to/dataset --json | jq '.overall_severity'
 ```
 
+## Huge datasets
+
+For very large datasets (e.g. `lerobot/droid_1.0.1` at ~28M frames across 156 data parquets + videos), always pass `--max-episodes N` with a small N (10-100). Running without it attempts a full download, which:
+
+- On the hosted [HF Space](https://huggingface.co/spaces/jashshah999/lerobot-doctor): **will fail** -- the Space has ~50GB ephemeral disk. The Space also blocks "all episodes" on datasets with >1M frames.
+- Locally: works if you have the bandwidth and disk, but is slow.
+
+When `--max-episodes` is set on a HF dataset, lerobot-doctor:
+
+1. Fetches small meta files (info.json, tasks.parquet, stats.json).
+2. Downloads episodes meta parquets one at a time until the first N episodes are covered.
+3. Resolves `data/chunk_index` + `data/file_index` to pull only the data parquets that contain those N episodes.
+
+Checks that rely on the full dataset (e.g. `total_episodes` count in metadata) are automatically skipped in partial mode instead of flagging false-positive failures.
+
+**Future work:** sampled full-dataset scans (random subset across chunks), video sampling without full download.
+
 ## Development
 
 ```bash
