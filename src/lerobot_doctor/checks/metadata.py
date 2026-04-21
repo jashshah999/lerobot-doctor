@@ -54,8 +54,10 @@ def check_metadata(dataset: LoadedDataset) -> CheckResult:
                 f"total_tasks={info.total_tasks} but tasks.parquet has {len(dataset.tasks)} rows"
             )
 
+    partial = dataset.max_episodes_applied is not None
+
     # Check total_frames vs actual
-    if dataset.episodes_data:
+    if dataset.episodes_data and not partial:
         actual_frames = sum(ep.length for ep in dataset.episodes_data)
         if info.total_frames is not None and actual_frames != info.total_frames:
             # Only fail if we loaded all episodes
@@ -66,7 +68,11 @@ def check_metadata(dataset: LoadedDataset) -> CheckResult:
 
     # Check total_episodes vs actual episode meta
     if dataset.episodes_meta:
-        if info.total_episodes is not None and len(dataset.episodes_meta) != info.total_episodes:
+        if partial:
+            result.pass_(
+                f"Skipped total_episodes check (loaded partial subset via --max-episodes={dataset.max_episodes_applied})"
+            )
+        elif info.total_episodes is not None and len(dataset.episodes_meta) != info.total_episodes:
             result.fail(
                 f"total_episodes={info.total_episodes} but found {len(dataset.episodes_meta)} episode metadata entries"
             )

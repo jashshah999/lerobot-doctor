@@ -54,6 +54,7 @@ class LoadedDataset:
     episodes_data: list[EpisodeData] = field(default_factory=list)
     tasks: list[dict] | None = None
     is_local: bool = True
+    max_episodes_applied: int | None = None  # set when user passed --max-episodes
 
 
 def load_info(root: Path) -> DatasetInfo | str:
@@ -338,6 +339,7 @@ def load_local(root: Path, max_episodes: int | None = None) -> LoadedDataset:
     ds.episodes_meta = load_episodes_meta(root, ds.info)
     ds.episodes_data = load_episode_data(root, ds.info, max_episodes=max_episodes)
     ds.tasks = load_tasks(root)
+    ds.max_episodes_applied = max_episodes
     return ds
 
 

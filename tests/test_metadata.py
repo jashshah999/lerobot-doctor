@@ -72,6 +72,19 @@ def test_wrong_total_episodes(tmp_path):
     assert any("total_episodes" in m.message for m in result.messages)
 
 
+def test_partial_load_skips_total_episodes_check(tmp_path):
+    """When max_episodes causes a partial load, total_episodes mismatch must not FAIL."""
+    root = create_dataset(tmp_path / "dataset", n_episodes=3)
+    info_path = root / "meta" / "info.json"
+    info = json.loads(info_path.read_text())
+    info["total_episodes"] = 99
+    info_path.write_text(json.dumps(info))
+    ds = load_local(root, max_episodes=1)
+    result = check_metadata(ds)
+    assert result.severity != Severity.FAIL
+    assert any("Skipped total_episodes check" in m.message for m in result.messages)
+
+
 def test_missing_tasks_parquet(tmp_path):
     root = create_dataset(tmp_path / "dataset")
     (root / "meta" / "tasks.parquet").unlink()
