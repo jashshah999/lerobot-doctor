@@ -128,8 +128,8 @@ def check_per_episode(dataset: LoadedDataset) -> CheckResult:
             # Frozen actions
             same = np.all(vals_2d[1:] == vals_2d[:-1], axis=-1)
             max_run = _max_consecutive_true(same)
-            if max_run >= 10:
-                pct = max_run / len(vals) * 100 if len(vals) > 0 else 0
+            pct = max_run / len(vals) * 100 if len(vals) > 0 else 0
+            if pct >= 5:
                 reasons.append(f"{pct:.0f}% of {col_name} frozen (consecutive identical)")
 
             # Action jumps

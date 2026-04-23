@@ -139,8 +139,8 @@ def _check_action_column(dataset: LoadedDataset, col_name: str, result: CheckRes
         same_as_prev = np.all(vals[1:] == vals[:-1], axis=-1) if vals.ndim > 1 else (vals[1:] == vals[:-1]).flatten()
         max_run = _max_consecutive_true(same_as_prev)
         ep_len = len(vals)
-        if max_run >= 10:
-            pct = max_run / ep_len * 100 if ep_len > 0 else 0
+        pct = max_run / ep_len * 100 if ep_len > 0 else 0
+        if pct >= 5:
             frozen_episodes.append((ep.episode_index, pct))
 
     if frozen_episodes:
