@@ -56,7 +56,7 @@ lerobot-doctor /path/to/dataset --ci
 lerobot-doctor /path/to/dataset --ci --fail-on=warn
 ```
 
-## Checks (11 total)
+## Checks (12 total)
 
 | Check | What it catches |
 |-------|----------------|
@@ -71,6 +71,34 @@ lerobot-doctor /path/to/dataset --ci --fail-on=warn
 | **anomalies** | Stuck actuators (>80% static), near-duplicate episodes, distribution shift across dataset, broken sensors (constant observations) |
 | **portability** | Absolute paths, symlinks, large files, HF Hub compatibility, non-standard files |
 | **per_episode** | Per-episode drilldown: flags specific bad episodes with reasons (short, frozen, NaN, timestamp gaps, action jumps) |
+| **kinematics** | Actions that violate a robot's *real* physical joint limits (position, and implied velocity), from a URDF -- distinct from `actions`/`statistics`, which only check against the dataset's own internal min/max/variance |
+
+### kinematics: checking against real robot limits, not just dataset statistics
+
+Every other check validates a dataset against itself. `kinematics` is the odd one out: it
+validates actions against an external ground truth — the robot's actual joint limits —
+so it can catch a command that's statistically unremarkable (no clipping, no jumps, no
+NaNs) but physically unreachable.
+
+```bash
+# Uses a small built-in registry, keyed by the dataset's robot_type (currently: so100, so101)
+lerobot-doctor lerobot/svla_so101_pickplace --checks kinematics
+
+# Or supply any robot's URDF directly
+lerobot-doctor /path/to/dataset --checks kinematics --urdf /path/to/robot.urdf
+```
+
+**Known limitation:** some LeRobot robot configs (several SO-100/SO-101 setups included)
+store actions as a normalized percentage (roughly `[-100, 100]`) rather than the URDF's
+radians. Checking those directly would flag nearly every frame as a "violation" — not a
+real kinematic problem, just a unit mismatch. The check guards against this: if most
+values are out of bounds *and* their typical magnitude is more than 10x the limit's scale,
+it's reported as a likely unit mismatch and skipped, not failed. This guard isn't perfect —
+validated against `lerobot/svla_so101_pickplace`, it correctly caught the mismatch on 5 of
+6 joints; the 6th (`gripper`) has a URDF range so small (~1.9 rad wide) that a percent-scale
+value doesn't clear the 10x bar, so it's still reported as a false "violation" there. There's
+no reliable general fix without a units field in the dataset itself, which LeRobot doesn't
+provide today — flagging this here for visibility rather than hiding it.
 
 ## Exit codes
 
