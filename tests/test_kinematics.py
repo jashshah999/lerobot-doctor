@@ -19,7 +19,12 @@ from tests.conftest import create_dataset
 SO101_JOINT_NAMES = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper"]
 
 
-def _so101_dataset(tmp_path, actions: list[list[float]], robot_type: str = "so101_follower") -> Path:
+def _so101_dataset(
+    tmp_path,
+    actions: list[list[float]],
+    robot_type: str = "so101_follower",
+    names: list[str] | None = None,
+) -> Path:
     """A dataset with SO-101-style action names and a given sequence of actions."""
     n = len(actions)
     root = create_dataset(tmp_path / "dataset", n_episodes=1, n_frames_per_ep=n, fps=30, action_dims=6)
@@ -27,7 +32,7 @@ def _so101_dataset(tmp_path, actions: list[list[float]], robot_type: str = "so10
     info_path = root / "meta" / "info.json"
     info = json.loads(info_path.read_text())
     info["robot_type"] = robot_type
-    info["features"]["action"]["names"] = [f"{j}.pos" for j in SO101_JOINT_NAMES]
+    info["features"]["action"]["names"] = names or [f"{j}.pos" for j in SO101_JOINT_NAMES]
     info_path.write_text(json.dumps(info))
 
     data_file = root / "data" / "chunk-000" / "file-000.parquet"
@@ -59,12 +64,14 @@ def test_position_beyond_urdf_limit_is_flagged(tmp_path):
 
 
 def test_unmatched_robot_type_is_skipped_not_failed(tmp_path):
+    # No registry entry and no --urdf: an informational skip, not a warning.
+    # Most datasets have no registry entry; a default run must not warn on them.
     actions = [[3.0, 0.0, -0.5, 0.0, 0.0, 0.5] for _ in range(10)]
     ds = load_local(_so101_dataset(tmp_path, actions, robot_type="some_custom_arm"))
 
     result = check_kinematics(ds)
 
-    assert result.severity == Severity.WARN
+    assert result.severity == Severity.PASS
     assert any("not in the built-in registry" in m.message for m in result.messages)
 
 
@@ -150,3 +157,98 @@ def test_parse_urdf_limits_skips_fixed_and_unlimited_joints(tmp_path):
     assert limits["real_joint"].lower == -1.0
     assert limits["real_joint"].upper == 1.0
     assert limits["real_joint"].velocity == 2.0
+
+
+def test_vel_dim_within_velocity_limit_is_not_a_position_violation(tmp_path):
+    # 3.0 rad/s commanded velocity is legal (SO-101 velocity limit is 10 rad/s) but
+    # far outside shoulder_pan's position bounds; it must not be flagged.
+    names = ["shoulder_pan.pos", "shoulder_pan.vel", "elbow_flex.pos", "wrist_flex.pos", "wrist_roll.pos", "gripper.pos"]
+    actions = [[0.0, 3.0, -0.5, 0.0, 0.0, 0.5] for _ in range(10)]
+    ds = load_local(_so101_dataset(tmp_path, actions, names=names))
+
+    result = check_kinematics(ds)
+
+    assert result.severity == Severity.PASS
+    assert not any("outside physical joint limits" in m.message for m in result.messages)
+
+
+def test_vel_dim_above_velocity_limit_is_flagged(tmp_path):
+    # 30 rad/s commanded velocity is above the SO-101 declared limit of 10 rad/s.
+    names = ["shoulder_pan.pos", "shoulder_pan.vel", "elbow_flex.pos", "wrist_flex.pos", "wrist_roll.pos", "gripper.pos"]
+    actions = [[0.0, 30.0, -0.5, 0.0, 0.0, 0.5] for _ in range(10)]
+    ds = load_local(_so101_dataset(tmp_path, actions, names=names))
+
+    result = check_kinematics(ds)
+
+    assert result.severity == Severity.FAIL
+    assert any("shoulder_pan.vel" in m.message and "velocity above" in m.message for m in result.messages)
+
+
+def test_nan_does_not_defeat_units_mismatch_guard(tmp_path):
+    # A single NaN frame must not turn the documented WARN-and-skip units mismatch
+    # into a misdiagnosed physical-limit FAIL.
+    actions = [[85.0, -90.0, 70.0, 60.0, -50.0, 20.0] for _ in range(10)]
+    actions[0] = [float("nan"), -90.0, 70.0, 60.0, -50.0, 20.0]
+    ds = load_local(_so101_dataset(tmp_path, actions))
+
+    result = check_kinematics(ds)
+
+    assert result.severity == Severity.WARN
+    assert any("units mismatch" in m.message for m in result.messages)
+    assert not any("outside physical joint limits" in m.message for m in result.messages)
+
+
+def test_ragged_action_rows_do_not_crash(tmp_path):
+    # An episode whose action rows have inhomogeneous lengths is stored as a raw
+    # list by the loader; the kinematics check must skip it, not crash the run.
+    actions = [[0.0, 0.0, -0.5, 0.0, 0.0, 0.5] for _ in range(9)]
+    actions.append([0.0, 0.0, -0.5, 0.0, 0.0])  # 5 dims instead of 6
+    ds = load_local(_so101_dataset(tmp_path, actions))
+
+    result = check_kinematics(ds)
+
+    assert result.severity in (Severity.PASS, Severity.WARN)
+
+
+def test_nonexistent_explicit_urdf_fails(tmp_path):
+    actions = [[0.0, 0.0, -0.5, 0.0, 0.0, 0.5] for _ in range(5)]
+    ds = load_local(_so101_dataset(tmp_path, actions))
+    ds.robot_urdf = tmp_path / "does_not_exist.urdf"
+
+    result = check_kinematics(ds)
+
+    assert result.severity == Severity.FAIL
+    assert any("failed to parse" in m.message for m in result.messages)
+
+
+def test_explicit_urdf_without_limited_joints_fails(tmp_path):
+    urdf = tmp_path / "empty.urdf"
+    urdf.write_text('<robot name="empty"><joint name="a" type="fixed"/></robot>')
+    actions = [[0.0, 0.0, -0.5, 0.0, 0.0, 0.5] for _ in range(5)]
+    ds = load_local(_so101_dataset(tmp_path, actions))
+    ds.robot_urdf = urdf
+
+    result = check_kinematics(ds)
+
+    assert result.severity == Severity.FAIL
+    assert any("no revolute/prismatic joints" in m.message for m in result.messages)
+
+
+def test_malformed_limits_lower_greater_than_upper_skipped_with_warn(tmp_path):
+    urdf = tmp_path / "malformed.urdf"
+    urdf.write_text(dedent("""\
+        <robot name="malformed">
+          <joint name="shoulder_pan" type="revolute">
+            <limit lower="1.0" upper="-1.0" velocity="1.0" effort="1.0"/>
+          </joint>
+        </robot>
+    """))
+    actions = [[0.05, 0.0, -0.5, 0.0, 0.0, 0.5] for _ in range(5)]
+    ds = load_local(_so101_dataset(tmp_path, actions))
+    ds.robot_urdf = urdf
+
+    result = check_kinematics(ds)
+
+    assert result.severity == Severity.WARN
+    assert any("malformed limits" in m.message for m in result.messages)
+    assert not any("outside physical joint limits" in m.message for m in result.messages)

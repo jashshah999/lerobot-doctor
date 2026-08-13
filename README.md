@@ -130,8 +130,10 @@ Episodes: 206 | Frames: 25,650 | FPS: 10
 [WARN] Per-Episode Drilldown
   - Episode 2: 1 sudden action jumps
   - Episode 3: 2 sudden action jumps
+[PASS] Kinematic Feasibility
+  - Skipped: no --urdf given and robot_type='pusht' is not in the built-in registry
 
-Summary: 5 PASS | 6 WARN
+Summary: 6 PASS | 6 WARN
 
 Suggested fixes:
   Check sensor connections -- constant readings indicate hardware issues
