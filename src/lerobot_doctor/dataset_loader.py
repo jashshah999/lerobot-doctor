@@ -60,6 +60,7 @@ class LoadedDataset:
     tasks: list[dict] | None = None
     is_local: bool = True
     max_episodes_applied: int | None = None  # set when user passed --max-episodes
+    robot_urdf: Path | None = None  # set when user passed --urdf, for check_kinematics
     archive_path: Path | None = None
     archive_inner_root: str | None = None
     _temp_dir: Any | None = field(default=None, repr=False, compare=False)

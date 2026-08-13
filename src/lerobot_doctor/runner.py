@@ -20,6 +20,7 @@ def _get_all_checks():
     from lerobot_doctor.checks.anomalies import check_anomalies
     from lerobot_doctor.checks.portability import check_portability
     from lerobot_doctor.checks.per_episode import check_per_episode
+    from lerobot_doctor.checks.kinematics import check_kinematics
     return {
         "metadata": check_metadata,
         "temporal": check_temporal,
@@ -32,6 +33,7 @@ def _get_all_checks():
         "anomalies": check_anomalies,
         "portability": check_portability,
         "per_episode": check_per_episode,
+        "kinematics": check_kinematics,
     }
 
 

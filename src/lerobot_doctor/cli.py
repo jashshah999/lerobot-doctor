@@ -24,6 +24,9 @@ def main(argv: list[str] | None = None):
     check_p.add_argument("--checks", type=str, default=None,
                          help="Comma-separated list of checks to run (default: all)")
     check_p.add_argument("--max-episodes", type=int, default=None)
+    check_p.add_argument("--urdf", type=str, default=None, metavar="PATH",
+                         help="URDF file to check actions against for the kinematics check "
+                              "(otherwise looked up from robot_type in a small built-in registry)")
     check_p.add_argument("--json", action="store_true", dest="json_output")
     check_p.add_argument("-v", "--verbose", action="store_true")
     check_p.add_argument("--ci", action="store_true")
@@ -112,6 +115,9 @@ def _run_check(args):
 
     check_names = [c.strip() for c in args.checks.split(",")] if args.checks else None
     dataset = _load_dataset_or_exit(args.dataset, max_episodes=args.max_episodes)
+    if args.urdf:
+        from pathlib import Path
+        dataset.robot_urdf = Path(args.urdf)
 
     report = run_checks(dataset, checks=check_names, verbose=args.verbose)
 
