@@ -68,11 +68,26 @@ def main(argv: list[str] | None = None):
     merge_p.add_argument("datasets", nargs="+", help="Paths to datasets")
     merge_p.add_argument("--post-merge", action="store_true")
 
+    # === EXPLORE ===
+    explore_p = subparsers.add_parser("explore", help="Data exploration & diagnostics")
+    explore_p.add_argument("exploration", choices=["outliers"],
+                           help="Type of exploration: outliers, clipping, distribution (coming soon)")
+    explore_p.add_argument("dataset", help="Path to local dataset")
+    explore_p.add_argument("--features", type=str, default="action",
+                           help="Comma-separated feature column name(s), e.g. 'action' or 'action,observation.state' (default: action)")
+    explore_p.add_argument("--threshold", type=float, default=10.0,
+                           help="Z-score threshold for outlier detection (default: 10.0)")
+    explore_p.add_argument("--max-episodes", type=int, default=None,
+                           help="Limit number of episodes to scan")
+    explore_p.add_argument("--top", type=int, default=None,
+                           help="Show only top N outliers (sorted by |z|)")
+    explore_p.add_argument("--json", action="store_true", dest="json_output")
+
     # Parse -- handle legacy (no subcommand = "check")
     if argv is None:
         argv = sys.argv[1:]
 
-    known_commands = {"check", "fix", "trim", "score", "gate", "merge-check", "--version", "-h", "--help"}
+    known_commands = {"check", "fix", "trim", "score", "gate", "merge-check", "explore", "--version", "-h", "--help"}
     if argv and argv[0] not in known_commands and not argv[0].startswith("-"):
         argv = ["check"] + argv
 
@@ -90,6 +105,8 @@ def main(argv: list[str] | None = None):
         _run_gate(args)
     elif args.command == "merge-check":
         _run_merge_check(args)
+    elif args.command == "explore":
+        _run_explore(args)
     else:
         parser.print_help()
 
@@ -238,6 +255,52 @@ def _run_merge_check(args):
     for s in result.suggestions:
         print(f"  [FIX] {s}")
     if not result.compatible:
+        sys.exit(1)
+
+
+def _run_explore(args):
+    from pathlib import Path
+    from lerobot_doctor.explore.outliers import find_outliers, format_outlier_report
+
+    # Parse --features: comma-separated list, default "action"
+    feature_names = [f.strip() for f in args.features.split(",") if f.strip()]
+    if not feature_names:
+        feature_names = ["action"]
+
+    root = Path(args.dataset)
+    if not root.is_dir():
+        print(f"Error: dataset path does not exist or is not a directory: {root}", file=sys.stderr)
+        sys.exit(1)
+
+    if args.exploration == "outliers":
+        for feat in feature_names:
+            result = find_outliers(
+                root,
+                feature=feat,
+                threshold=args.threshold,
+                max_episodes=args.max_episodes,
+            )
+
+            if args.json_output:
+                import json as _json
+                out = {
+                    "feature": result.feature_name,
+                    "n_dims": result.n_dims,
+                    "total_frames": result.total_frames,
+                    "threshold": result.threshold,
+                    "mean_per_dim": [round(m, 6) for m in result.mean_per_dim],
+                    "std_per_dim": [round(s, 6) for s in result.std_per_dim],
+                    "outliers": [o.as_dict() for o in result.outliers],
+                }
+                if len(feature_names) > 1:
+                    print(f"# --- {feat} ---")
+                print(_json.dumps(out, indent=2))
+            else:
+                if len(feature_names) > 1:
+                    print(f"\n{'='*80}")
+                print(format_outlier_report(result, top=args.top))
+    else:
+        print(f"Error: unknown exploration type '{args.exploration}'", file=sys.stderr)
         sys.exit(1)
 
 
