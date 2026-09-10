@@ -220,3 +220,281 @@ def format_outlier_report(result: OutlierResult, top: int | None = None) -> str:
         lines.append(f"\n... and {len(result.outliers) - top} more (showing top {top} by |z|)")
 
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Visualization
+# ---------------------------------------------------------------------------
+
+def _find_video_path(root: Path, episode_index: int) -> Path | None:
+    """Locate the video file for a given episode index.
+
+    LeRobot v2 layout: videos/chunk-{ep//1000:03d}/{video_key}/episode_{ep:06d}.mp4
+    """
+    info_path = root / "meta" / "info.json"
+    video_key = "observation.images.front"
+    chunks_size = 1000
+
+    if info_path.exists():
+        import json
+        try:
+            info = json.loads(info_path.read_text())
+            chunks_size = info.get("chunks_size", 1000)
+            # Try to extract video_key from video_path template
+            vp = info.get("video_path", "")
+            # e.g. "videos/chunk-{episode_chunk:03d}/{video_key}/episode_{episode_index:06d}.mp4"
+            if "{video_key}" in vp:
+                # We don't know the exact key, search directories
+                pass
+        except Exception:
+            pass
+
+    chunk = episode_index // chunks_size
+    # Search for any video file matching this episode
+    videos_dir = root / "videos"
+    if not videos_dir.exists():
+        return None
+
+    # Walk: videos/chunk-XXX/<any_key>/episode_XXXXXX.mp4
+    candidates = sorted(videos_dir.rglob(f"episode_{episode_index:06d}.mp4"))
+    if candidates:
+        return candidates[0]
+    return None
+
+
+def _read_video_frame(video_path: Path, frame_idx: int) -> np.ndarray | None:
+    """Read a single frame from an mp4 video using OpenCV."""
+    try:
+        import cv2
+    except ImportError:
+        raise ImportError("opencv-python-headless is required for visualization: pip install opencv-python-headless")
+
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        return None
+
+    cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+    ret, frame = cap.read()
+    cap.release()
+
+    if not ret:
+        return None
+    return frame
+
+
+def _load_episode_actions(root: Path, episode_index: int, feature_name: str) -> np.ndarray | None:
+    """Load the feature values for a specific episode, indexed by frame_index."""
+    info_path = root / "meta" / "info.json"
+    chunks_size = 1000
+    if info_path.exists():
+        import json
+        try:
+            info = json.loads(info_path.read_text())
+            chunks_size = info.get("chunks_size", 1000)
+        except Exception:
+            pass
+
+    chunk = episode_index // chunks_size
+    parquet_path = root / "data" / f"chunk-{chunk:03d}" / f"episode_{episode_index:06d}.parquet"
+    if not parquet_path.exists():
+        return None
+
+    try:
+        table = pq.read_table(str(parquet_path), columns=[feature_name, "frame_index"])
+    except Exception:
+        return None
+
+    frames = table.column("frame_index").to_pylist()
+    values = table.column(feature_name).to_pylist()
+
+    # Build a dict: frame_index -> feature_value
+    # feature_value could be a list (multi-dim) or scalar
+    action_map: dict[int, np.ndarray] = {}
+    for f, v in zip(frames, values):
+        arr = np.array(v, dtype=np.float64)
+        action_map[int(f)] = arr
+
+    return action_map
+
+
+def visualize_outliers(
+    root: Path,
+    result: OutlierResult,
+    output_dir: Path,
+    context_frames: int = 2,
+    top: int | None = None,
+) -> list[Path]:
+    """Generate visualization images for each unique outlier frame.
+
+    For each unique (episode_index, frame_index) that has at least one outlier,
+    extracts frames [frame-context_frames, ..., frame+context_frames] from the
+    video, annotates each with frame_index and the outlier dimension values,
+    and saves a horizontal strip image.
+
+    Args:
+        root: Dataset root directory
+        result: OutlierResult from find_outliers()
+        output_dir: Where to save the visualization PNGs
+        context_frames: Number of frames before/after the outlier frame (default 2)
+        top: Limit number of outlier frames to visualize (by max |z| in frame)
+
+    Returns:
+        List of saved image paths
+    """
+    import cv2
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Group outliers by (episode_index, frame_index)
+    frame_groups: dict[tuple[int, int], list[OutlierRecord]] = {}
+    for o in result.outliers:
+        key = (o.episode_index, o.frame_index)
+        frame_groups.setdefault(key, []).append(o)
+
+    # Sort by max |z| in each frame
+    sorted_frames = sorted(
+        frame_groups.keys(),
+        key=lambda k: max(o.z_score for o in frame_groups[k]),
+        reverse=True,
+    )
+    if top is not None:
+        sorted_frames = sorted_frames[:top]
+
+    saved_paths: list[Path] = []
+
+    for ep_idx, frame_idx in sorted_frames:
+        outliers_here = frame_groups[(ep_idx, frame_idx)]
+
+        # Load action values for this episode
+        action_map = _load_episode_actions(root, ep_idx, result.feature_name)
+
+        # Find video
+        video_path = _find_video_path(root, ep_idx)
+        if video_path is None:
+            print(f"  [SKIP] No video found for episode {ep_idx}")
+            continue
+
+        # Extract context frames
+        frame_indices = list(range(frame_idx - context_frames, frame_idx + context_frames + 1))
+        n_frames = len(frame_indices)
+        is_center = [i == context_frames for i in range(n_frames)]
+
+        images: list[np.ndarray] = []
+        labels: list[str] = []
+
+        for fi, target_frame in enumerate(frame_indices):
+            frame = _read_video_frame(video_path, target_frame)
+            if frame is None:
+                # Black placeholder if frame can't be read
+                frame = np.zeros((360, 640, 3), dtype=np.uint8)
+
+            # Build label: frame_index + outlier dim values
+            label_parts = [f"frame {target_frame}"]
+            if action_map is not None and target_frame in action_map:
+                act_vals = action_map[target_frame]
+                # Show values for dims that are outliers at the CENTER frame
+                if fi == context_frames:
+                    # Center: show all outlier dims with their values
+                    dims_str = ", ".join(
+                        f"d{o.dim}={act_vals[o.dim]:.3f}(|z|={o.z_score:.1f})"
+                        for o in outliers_here
+                    )
+                else:
+                    # Context: show the same dims but just values
+                    dims_str = ", ".join(
+                        f"d{o.dim}={act_vals[o.dim]:.3f}"
+                        for o in outliers_here
+                    )
+                label_parts.append(dims_str)
+
+            label = "\n".join(label_parts)
+            labels.append(label)
+
+            # Annotate frame
+            annotated = _annotate_frame(frame, label, is_center[fi], outliers_here if fi == context_frames else None)
+            images.append(annotated)
+
+        # Ensure all frames have the same height before hstack
+        max_h = max(img.shape[0] for img in images)
+        for i in range(len(images)):
+            if images[i].shape[0] != max_h:
+                diff = max_h - images[i].shape[0]
+                images[i] = cv2.copyMakeBorder(images[i], 0, diff, 0, 0,
+                                               cv2.BORDER_CONSTANT, value=(0, 0, 0))
+
+        # Stitch horizontally
+        strip = np.hstack(images)
+
+        # Top banner
+        banner_text = f"Episode {ep_idx} | Frame {frame_idx} (outlier center) | {len(outliers_here)} outlier dim(s)"
+        strip = _add_top_banner(strip, banner_text)
+
+        out_path = output_dir / f"ep{ep_idx:06d}_frame{frame_idx:06d}_outlier.png"
+        cv2.imwrite(str(out_path), strip)
+        saved_paths.append(out_path)
+        print(f"  [SAVE] {out_path}")
+
+    return saved_paths
+
+
+def _annotate_frame(
+    frame: np.ndarray,
+    label: str,
+    is_center: bool,
+    center_outliers: list[OutlierRecord] | None = None,
+) -> np.ndarray:
+    """Add annotation text and border to a single video frame."""
+    import cv2
+
+    h, w = frame.shape[:2]
+
+    # Add border: thick red for center, thin gray for context
+    if is_center:
+        border_color = (0, 0, 255)  # BGR red
+        border_px = 6
+    else:
+        border_color = (128, 128, 128)
+        border_px = 2
+
+    frame = cv2.copyMakeBorder(
+        frame, border_px, border_px, border_px, border_px,
+        cv2.BORDER_CONSTANT, value=border_color,
+    )
+
+    # Add semi-transparent overlay at bottom for label
+    overlay_h = 70
+    overlay = frame.copy()
+    cv2.rectangle(overlay, (0, frame.shape[0] - overlay_h), (frame.shape[1], frame.shape[0]),
+                  (0, 0, 0), -1)
+    frame = cv2.addWeighted(overlay, 0.6, frame, 0.4, 0)
+
+    # Draw label text
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 0.55
+    thickness = 1 if not is_center else 2
+    y_start = frame.shape[0] - overlay_h + 20
+
+    lines = label.split("\n")
+    for li, line in enumerate(lines):
+        color = (0, 255, 255) if is_center else (255, 255, 255)  # yellow for center
+        cv2.putText(frame, line, (10, y_start + li * 22),
+                    font, font_scale, color, thickness, cv2.LINE_AA)
+
+    return frame
+
+
+def _add_top_banner(image: np.ndarray, text: str) -> np.ndarray:
+    """Add a top banner strip to a horizontal image."""
+    import cv2
+
+    banner_h = 50
+    w = image.shape[1]
+    banner = np.zeros((banner_h, w, 3), dtype=np.uint8)
+    # Dark blue banner
+    banner[:] = (30, 30, 80)
+
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 0.7
+    cv2.putText(banner, text, (15, 32), font, font_scale, (200, 220, 255), 2, cv2.LINE_AA)
+
+    return np.vstack([banner, image])

@@ -82,6 +82,14 @@ def main(argv: list[str] | None = None):
     explore_p.add_argument("--top", type=int, default=None,
                            help="Show only top N outliers (sorted by |z|)")
     explore_p.add_argument("--json", action="store_true", dest="json_output")
+    explore_p.add_argument("--visualize", action="store_true",
+                           help="Generate visualization images for outlier frames (requires video files)")
+    explore_p.add_argument("--output-dir", type=str, default=None, metavar="PATH",
+                           help="Directory to save visualization images (default: <dataset>/explore_outliers/)")
+    explore_p.add_argument("--context-frames", type=int, default=2,
+                           help="Number of frames before/after the outlier frame in visualization (default: 2)")
+    explore_p.add_argument("--open", action="store_true",
+                           help="Auto-open generated visualization images (macOS/Linux: 'open'/'xdg-open')")
 
     # Parse -- handle legacy (no subcommand = "check")
     if argv is None:
@@ -258,6 +266,42 @@ def _run_merge_check(args):
         sys.exit(1)
 
 
+def _open_images(image_paths: list[Path]):
+    """Display images using cv2.imshow (cross-platform), fallback to system open."""
+    import subprocess
+
+    # Try cv2.imshow first (works everywhere OpenCV has GUI support)
+    imshow_ok = False
+    try:
+        import cv2
+        if hasattr(cv2, "imshow"):
+            print("  Press any key → next image, 'q' → quit")
+            for p in image_paths:
+                img = cv2.imread(str(p))
+                if img is None:
+                    continue
+                win_name = f"Outlier: {p.name}"
+                cv2.imshow(win_name, img)
+                imshow_ok = True
+                key = cv2.waitKey(0) & 0xFF
+                cv2.destroyWindow(win_name)
+                if key == ord("q"):
+                    break
+            try:
+                cv2.destroyAllWindows()
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    if imshow_ok:
+        return
+
+    # Fallback: system open command
+    opener = "open" if sys.platform == "darwin" else "xdg-open"
+    subprocess.run([opener, str(image_paths[0].parent)], check=False)
+
+
 def _run_explore(args):
     from pathlib import Path
     from lerobot_doctor.explore.outliers import find_outliers, format_outlier_report
@@ -273,6 +317,8 @@ def _run_explore(args):
         sys.exit(1)
 
     if args.exploration == "outliers":
+        from lerobot_doctor.explore.outliers import find_outliers, format_outlier_report, visualize_outliers
+
         for feat in feature_names:
             result = find_outliers(
                 root,
@@ -299,6 +345,27 @@ def _run_explore(args):
                 if len(feature_names) > 1:
                     print(f"\n{'='*80}")
                 print(format_outlier_report(result, top=args.top))
+
+            if args.visualize and result.outliers:
+                out_dir = Path(args.output_dir) if args.output_dir else root / "explore_outliers"
+                # Per-feature subdir to avoid collisions
+                viz_dir = out_dir / feat.replace(".", "_")
+                print(f"\nGenerating visualizations → {viz_dir}")
+                try:
+                    saved = visualize_outliers(
+                        root, result, viz_dir,
+                        context_frames=args.context_frames,
+                        top=args.top,
+                    )
+                    print(f"  {len(saved)} image(s) saved")
+
+                    if args.open and saved:
+                        _open_images(saved)
+                        print(f"  [OPEN] {len(saved)} image(s) displayed")
+                except ImportError as e:
+                    print(f"  [ERROR] {e}", file=sys.stderr)
+                except Exception as e:
+                    print(f"  [ERROR] {e}", file=sys.stderr)
     else:
         print(f"Error: unknown exploration type '{args.exploration}'", file=sys.stderr)
         sys.exit(1)
