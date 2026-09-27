@@ -71,11 +71,35 @@ def main(argv: list[str] | None = None):
     merge_p.add_argument("datasets", nargs="+", help="Paths to datasets")
     merge_p.add_argument("--post-merge", action="store_true")
 
+    # === EXPLORE ===
+    explore_p = subparsers.add_parser("explore", help="Data exploration & diagnostics")
+    explore_p.add_argument("exploration", choices=["outliers"], help="Type of exploration")
+    explore_p.add_argument("dataset", help="Path to local dataset, .zip archive, or HF repo_id")
+    explore_p.add_argument("--features", type=str, default="action",
+                           help="Comma-separated feature column name(s), e.g. 'action' or 'action,observation.state' (default: action)")
+    explore_p.add_argument("--threshold", type=float, default=10.0,
+                           help="Z-score threshold for outlier detection (default: 10.0)")
+    explore_p.add_argument("--max-episodes", type=int, default=None,
+                           help="Limit number of episodes to scan")
+    explore_p.add_argument("--top", type=int, default=None,
+                           help="Show only top N outliers (sorted by |z|)")
+    explore_p.add_argument("--json", action="store_true", dest="json_output")
+    explore_p.add_argument("--visualize", action="store_true",
+                           help="Generate visualization images for outlier frames (requires video files)")
+    explore_p.add_argument("--camera", type=str, default=None,
+                           help="Video feature to visualize (default: first video feature)")
+    explore_p.add_argument("--output-dir", type=str, default="explore_outliers", metavar="PATH",
+                           help="Directory to save visualization images (default: ./explore_outliers/)")
+    explore_p.add_argument("--context-frames", type=int, default=2,
+                           help="Number of frames before/after the outlier frame in visualization (default: 2)")
+    explore_p.add_argument("--open", action="store_true",
+                           help="Auto-open generated visualization images (macOS/Linux: 'open'/'xdg-open')")
+
     # Parse -- handle legacy (no subcommand = "check")
     if argv is None:
         argv = sys.argv[1:]
 
-    known_commands = {"check", "fix", "trim", "score", "gate", "merge-check", "--version", "-h", "--help"}
+    known_commands = {"check", "fix", "trim", "score", "gate", "merge-check", "explore", "--version", "-h", "--help"}
     if argv and argv[0] not in known_commands and not argv[0].startswith("-"):
         argv = ["check"] + argv
 
@@ -93,6 +117,8 @@ def main(argv: list[str] | None = None):
         _run_gate(args)
     elif args.command == "merge-check":
         _run_merge_check(args)
+    elif args.command == "explore":
+        _run_explore(args)
     else:
         parser.print_help()
 
@@ -243,6 +269,96 @@ def _run_merge_check(args):
         print(f"  [FIX] {s}")
     if not result.compatible:
         sys.exit(1)
+
+
+def _open_images(image_paths: list):
+    """Display images using cv2.imshow (cross-platform), fallback to system open."""
+    import subprocess
+
+    # Try cv2.imshow first (works everywhere OpenCV has GUI support)
+    imshow_ok = False
+    try:
+        import cv2
+        if hasattr(cv2, "imshow"):
+            print("  Press any key -> next image, 'q' -> quit", file=sys.stderr)
+            for p in image_paths:
+                img = cv2.imread(str(p))
+                if img is None:
+                    continue
+                win_name = f"Outlier: {p.name}"
+                cv2.imshow(win_name, img)
+                imshow_ok = True
+                key = cv2.waitKey(0) & 0xFF
+                cv2.destroyWindow(win_name)
+                if key == ord("q"):
+                    break
+            try:
+                cv2.destroyAllWindows()
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    if imshow_ok:
+        return
+
+    # Fallback: system open command
+    opener = "open" if sys.platform == "darwin" else "xdg-open"
+    subprocess.run([opener, str(image_paths[0].parent)], check=False)
+
+
+def _run_explore(args):
+    from pathlib import Path
+    from lerobot_doctor.explore.outliers import find_outliers, format_outlier_report, visualize_outliers
+
+    feature_names = [f.strip() for f in args.features.split(",") if f.strip()] or ["action"]
+    dataset = _load_dataset_or_exit(args.dataset, max_episodes=args.max_episodes)
+
+    results = []
+    for feat in feature_names:
+        try:
+            results.append(find_outliers(dataset, feature=feat, threshold=args.threshold))
+        except ValueError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
+
+    if args.json_output:
+        print(json_module.dumps({
+            "dataset_path": dataset.display_path or str(dataset.root),
+            "results": [r.as_dict(top=args.top) for r in results],
+        }, indent=2))
+    else:
+        for i, result in enumerate(results):
+            if i:
+                print(f"\n{'=' * 80}")
+            print(format_outlier_report(result, top=args.top))
+
+    if not args.visualize:
+        return
+    if not dataset.is_local:
+        print("Error: --visualize needs the videos; download the dataset and pass its local path",
+              file=sys.stderr)
+        sys.exit(1)
+
+    # Progress goes to stderr so --json stdout stays parseable.
+    for result in results:
+        if not result.outliers:
+            continue
+        viz_dir = Path(args.output_dir) / result.feature_name.replace(".", "_")
+        print(f"\nGenerating visualizations -> {viz_dir}", file=sys.stderr)
+        try:
+            saved = visualize_outliers(
+                dataset, result, viz_dir,
+                video_key=args.camera,
+                context_frames=args.context_frames,
+                top=args.top,
+            )
+        except (ImportError, ValueError) as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
+        print(f"  {len(saved)} image(s) saved", file=sys.stderr)
+        if args.open and saved:
+            _open_images(saved)
 
 
 if __name__ == "__main__":
