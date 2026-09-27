@@ -59,7 +59,7 @@ lerobot-doctor /path/to/dataset --ci
 lerobot-doctor /path/to/dataset --ci --fail-on=warn
 ```
 
-## Checks (12 total)
+## Checks (13 total)
 
 | Check | What it catches |
 |-------|----------------|
@@ -75,6 +75,7 @@ lerobot-doctor /path/to/dataset --ci --fail-on=warn
 | **portability** | Absolute paths, symlinks, large files, HF Hub compatibility, non-standard files |
 | **per_episode** | Per-episode drilldown: flags specific bad episodes with reasons (short, frozen, NaN, timestamp gaps, action jumps) |
 | **kinematics** | Actions that violate a robot's *real* physical joint limits (position, and implied velocity), from a URDF -- distinct from `actions`/`statistics`, which only check against the dataset's own internal min/max/variance |
+| **identity** | Episodes whose observations/actions are exact copies of another (SHA-256 over all non-bookkeeping columns; videos excluded), copies carrying conflicting task/reward/success labels, and copies that cross `info.json` splits (train/eval leakage, FAIL) |
 
 ### kinematics: checking against real robot limits, not just dataset statistics
 
