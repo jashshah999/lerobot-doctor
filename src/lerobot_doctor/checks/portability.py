@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 
 from lerobot_doctor.dataset_loader import LoadedDataset
-from lerobot_doctor.runner import CheckResult, Severity
+from lerobot_doctor.runner import CheckResult, Severity, preview
 
 
 def check_portability(dataset: LoadedDataset) -> CheckResult:
@@ -52,7 +52,7 @@ def check_portability(dataset: LoadedDataset) -> CheckResult:
         if symlinks:
             result.warn(
                 f"{len(symlinks)} symlink(s) found -- may break on different machines: "
-                f"{[str(s.relative_to(root)) for s in symlinks[:5]]}"
+                f"{preview([str(s.relative_to(root)) for s in symlinks], 5, dataset.no_aggregate)}"
             )
 
     # Check file permissions (warn if not readable)
@@ -61,7 +61,7 @@ def check_portability(dataset: LoadedDataset) -> CheckResult:
         if f.is_file() and not os.access(f, os.R_OK):
             unreadable.append(str(f.relative_to(root)))
     if unreadable:
-        result.fail(f"{len(unreadable)} unreadable file(s): {unreadable[:5]}")
+        result.fail(f"{len(unreadable)} unreadable file(s): {preview(unreadable, 5, dataset.no_aggregate)}")
 
     # Check for non-standard file extensions in data/
     data_dir = root / "data"
@@ -71,7 +71,7 @@ def check_portability(dataset: LoadedDataset) -> CheckResult:
             if f.is_file() and f.suffix != ".parquet"
         ]
         if non_parquet:
-            result.warn(f"Non-parquet files in data/: {non_parquet[:5]}")
+            result.warn(f"Non-parquet files in data/: {preview(non_parquet, 5, dataset.no_aggregate)}")
 
     # Check for HF Hub compatibility
     _check_hf_compatibility(dataset, result)
@@ -93,7 +93,7 @@ def _check_hf_compatibility(dataset: LoadedDataset, result: CheckResult):
     if large_files:
         result.warn(
             f"{len(large_files)} file(s) over 5GB (may need git-lfs for HF Hub): "
-            f"{large_files[:3]}"
+            f"{preview(large_files, 3, dataset.no_aggregate)}"
         )
 
     # Check that data_path template uses standard LeRobot format

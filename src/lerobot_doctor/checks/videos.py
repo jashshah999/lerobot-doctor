@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from lerobot_doctor.dataset_loader import LoadedDataset
-from lerobot_doctor.runner import CheckResult, Severity
+from lerobot_doctor.runner import CheckResult, Severity, head, preview
 
 
 def _probe_video(path: Path, count_frames_if_needed: bool = False) -> dict:
@@ -223,7 +223,7 @@ def _check_video_feature(
         if len(missing_videos) > 10:
             result.fail(
                 f"{feat_name}: {len(missing_videos)} video files missing "
-                f"(episodes {missing_videos[:5]}...)"
+                f"(episodes {preview(missing_videos, 5, dataset.no_aggregate)})"
             )
         else:
             result.fail(f"{feat_name}: Video files missing for episodes {missing_videos}")
@@ -231,19 +231,28 @@ def _check_video_feature(
         result.pass_(f"{feat_name}: All video files present")
 
     if decode_errors:
-        result.fail(f"{feat_name}: {len(decode_errors)} video(s) failed to decode: episodes {decode_errors[:5]}")
+        result.fail(f"{feat_name}: {len(decode_errors)} video(s) failed to decode: episodes {preview(decode_errors, 5, dataset.no_aggregate)}")
 
     if fps_mismatches:
-        for relpath, vfps in fps_mismatches[:3]:
+        shown, hidden = head(fps_mismatches, 3, dataset.no_aggregate)
+        for relpath, vfps in shown:
             result.warn(f"{feat_name}: {relpath} video fps={vfps:.1f} != dataset fps={fps}")
+        if hidden:
+            result.warn(f"{feat_name}: ...and {hidden} more video(s) with fps mismatch")
 
     if resolution_mismatches:
-        for relpath, h, w, expected in resolution_mismatches[:3]:
+        shown, hidden = head(resolution_mismatches, 3, dataset.no_aggregate)
+        for relpath, h, w, expected in shown:
             result.warn(f"{feat_name}: {relpath} resolution {w}x{h} doesn't match shape {expected}")
+        if hidden:
+            result.warn(f"{feat_name}: ...and {hidden} more video(s) with resolution mismatch")
 
     if frame_count_mismatches:
-        for relpath, actual, expected, n_eps in frame_count_mismatches[:3]:
+        shown, hidden = head(frame_count_mismatches, 3, dataset.no_aggregate)
+        for relpath, actual, expected, n_eps in shown:
             result.warn(
                 f"{feat_name}: {relpath} has {actual} frames, expected {expected} "
                 f"from {n_eps} episode(s)"
             )
+        if hidden:
+            result.warn(f"{feat_name}: ...and {hidden} more video(s) with frame count mismatch")

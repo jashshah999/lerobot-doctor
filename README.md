@@ -40,6 +40,9 @@ lerobot-doctor /path/to/dataset --checks metadata,temporal,actions
 # JSON output (for CI/CD integration)
 lerobot-doctor /path/to/dataset --json
 
+# List every flagged episode/file instead of "...and N more" (works with --json, --ci, --markdown)
+lerobot-doctor /path/to/dataset --json --no-aggregate
+
 # Markdown report (paste into PRs or dataset cards)
 lerobot-doctor /path/to/dataset --markdown report.md
 
@@ -165,6 +168,12 @@ Use `--json` for JSON output without CI exit-code behavior.
 
 ```bash
 lerobot-doctor /path/to/dataset --json | jq '.overall_severity'
+```
+
+Long lists are truncated by default (e.g. `...and 28 more flagged episodes`) to keep reports readable. Add `--no-aggregate` to get every flagged episode, file and index:
+
+```bash
+lerobot-doctor /path/to/dataset --json --no-aggregate | jq '.checks[].messages[].message'
 ```
 
 ## Huge datasets

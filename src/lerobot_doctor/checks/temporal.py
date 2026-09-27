@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 from lerobot_doctor.dataset_loader import LoadedDataset
-from lerobot_doctor.runner import CheckResult, Severity
+from lerobot_doctor.runner import CheckResult, Severity, head, preview
 
 
 def check_temporal(dataset: LoadedDataset) -> CheckResult:
@@ -44,7 +44,7 @@ def check_temporal(dataset: LoadedDataset) -> CheckResult:
                     total_duplicates += len(non_mono)
                     ep_issues.append(
                         f"{len(non_mono)} non-monotonic timestamp(s) at frame indices "
-                        f"{non_mono[:5].tolist()}{'...' if len(non_mono) > 5 else ''}"
+                        f"{preview(non_mono.tolist(), 5, dataset.no_aggregate)}"
                     )
 
                 # Dropped frames (gap > 1.5x expected)
@@ -53,7 +53,7 @@ def check_temporal(dataset: LoadedDataset) -> CheckResult:
                     total_dropped += len(gaps)
                     ep_issues.append(
                         f"{len(gaps)} dropped frame gap(s) at frame indices "
-                        f"{gaps[:5].tolist()}{'...' if len(gaps) > 5 else ''}"
+                        f"{preview(gaps.tolist(), 5, dataset.no_aggregate)}"
                     )
 
                 # FPS consistency (intervals within 10% tolerance)
@@ -86,7 +86,7 @@ def check_temporal(dataset: LoadedDataset) -> CheckResult:
         expected_ep = list(range(min(ep_indices), max(ep_indices) + 1))
         missing_eps = set(expected_ep) - set(ep_indices)
         if missing_eps:
-            result.warn(f"Missing episode indices: {sorted(missing_eps)[:10]}{'...' if len(missing_eps) > 10 else ''}")
+            result.warn(f"Missing episode indices: {preview(sorted(missing_eps), 10, dataset.no_aggregate)}")
 
     # Check global index sequential
     all_indices = []
@@ -102,11 +102,12 @@ def check_temporal(dataset: LoadedDataset) -> CheckResult:
     if not episodes_with_issues and total_dropped == 0 and total_duplicates == 0:
         result.pass_(f"All {len(dataset.episodes_data)} episodes have consistent timestamps and frame indices")
     else:
-        for ep_idx, issues in episodes_with_issues[:10]:
+        shown, hidden = head(episodes_with_issues, 10, dataset.no_aggregate)
+        for ep_idx, issues in shown:
             for issue in issues:
                 result.warn(f"Episode {ep_idx}: {issue}")
-        if len(episodes_with_issues) > 10:
-            result.warn(f"...and {len(episodes_with_issues) - 10} more episodes with issues")
+        if hidden:
+            result.warn(f"...and {hidden} more episodes with issues")
         if total_dropped > 0:
             result.warn(f"Total dropped frame gaps across all episodes: {total_dropped}")
         if total_duplicates > 0:

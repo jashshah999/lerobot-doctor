@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 from lerobot_doctor.dataset_loader import LoadedDataset
-from lerobot_doctor.runner import CheckResult, Severity
+from lerobot_doctor.runner import CheckResult, Severity, preview
 
 SKIP_COLUMNS = {"timestamp", "frame_index", "episode_index", "index", "task_index"}
 
@@ -90,25 +90,25 @@ def check_consistency(dataset: LoadedDataset) -> CheckResult:
     if missing_cols_episodes:
         result.fail(
             f"{len(missing_cols_episodes)} episode(s) missing features present in episode 0: "
-            f"{[(idx, sorted(cols)) for idx, cols in missing_cols_episodes[:5]]}"
+            f"{preview([(idx, sorted(cols)) for idx, cols in missing_cols_episodes], 5, dataset.no_aggregate)}"
         )
 
     if extra_cols_episodes:
         result.warn(
             f"{len(extra_cols_episodes)} episode(s) have extra features not in episode 0: "
-            f"{[(idx, sorted(cols)) for idx, cols in extra_cols_episodes[:5]]}"
+            f"{preview([(idx, sorted(cols)) for idx, cols in extra_cols_episodes], 5, dataset.no_aggregate)}"
         )
 
     if shape_mismatches:
         result.fail(
             f"{len(shape_mismatches)} shape mismatch(es) across episodes: "
-            f"{[(idx, col, f'{exp}->{act}') for idx, col, exp, act in shape_mismatches[:5]]}"
+            f"{preview([(idx, col, f'{exp}->{act}') for idx, col, exp, act in shape_mismatches], 5, dataset.no_aggregate)}"
         )
 
     if dtype_mismatches:
         result.warn(
             f"{len(dtype_mismatches)} dtype mismatch(es) across episodes: "
-            f"{[(idx, col, f'{exp}->{act}') for idx, col, exp, act in dtype_mismatches[:5]]}"
+            f"{preview([(idx, col, f'{exp}->{act}') for idx, col, exp, act in dtype_mismatches], 5, dataset.no_aggregate)}"
         )
 
     if not (missing_cols_episodes or extra_cols_episodes or shape_mismatches or dtype_mismatches):

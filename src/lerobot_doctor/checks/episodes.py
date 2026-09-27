@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 from lerobot_doctor.dataset_loader import LoadedDataset
-from lerobot_doctor.runner import CheckResult, Severity
+from lerobot_doctor.runner import CheckResult, Severity, preview
 
 # Common policy chunk sizes (action prediction horizons)
 COMMON_CHUNK_SIZES = [10, 16, 20, 50, 100]
@@ -48,8 +48,7 @@ def check_episodes(dataset: LoadedDataset) -> CheckResult:
     if short_eps:
         result.warn(
             f"{len(short_eps)} episode(s) shorter than {short_threshold} frames "
-            f"(<{short_threshold/fps:.1f}s): {[e[0] for e in short_eps[:10]]}"
-            f"{'...' if len(short_eps) > 10 else ''}"
+            f"(<{short_threshold/fps:.1f}s): {preview([e[0] for e in short_eps], 10, dataset.no_aggregate)}"
         )
 
     # Single-frame episodes (can't compute stats)
@@ -57,13 +56,13 @@ def check_episodes(dataset: LoadedDataset) -> CheckResult:
     if single_frame:
         result.fail(
             f"{len(single_frame)} episode(s) with <=1 frame (can't compute statistics): "
-            f"{single_frame[:10]}"
+            f"{preview(single_frame, 10, dataset.no_aggregate)}"
         )
 
     # Empty episodes
     empty = [ep.episode_index for ep in dataset.episodes_data if ep.length == 0]
     if empty:
-        result.fail(f"{len(empty)} empty episode(s): {empty[:10]}")
+        result.fail(f"{len(empty)} empty episode(s): {preview(empty, 10, dataset.no_aggregate)}")
 
     # High variance in lengths (>2x std/mean ratio = very inconsistent)
     if mean_len > 0 and std_len / mean_len > 1.0:
@@ -83,9 +82,9 @@ def check_episodes(dataset: LoadedDataset) -> CheckResult:
             if ep.length > mean_len + 3 * std_len
         ]
         if outlier_short:
-            result.warn(f"{len(outlier_short)} abnormally short episode(s) (>3 std below mean): {outlier_short[:5]}")
+            result.warn(f"{len(outlier_short)} abnormally short episode(s) (>3 std below mean): {preview(outlier_short, 5, dataset.no_aggregate)}")
         if outlier_long:
-            result.warn(f"{len(outlier_long)} abnormally long episode(s) (>3 std above mean): {outlier_long[:5]}")
+            result.warn(f"{len(outlier_long)} abnormally long episode(s) (>3 std above mean): {preview(outlier_long, 5, dataset.no_aggregate)}")
 
     # Policy window compatibility
     for chunk_size in COMMON_CHUNK_SIZES:
@@ -109,7 +108,7 @@ def check_episodes(dataset: LoadedDataset) -> CheckResult:
         if mismatches:
             result.fail(
                 f"{len(mismatches)} episode(s) have data/metadata length mismatch: "
-                f"{[(idx, f'data={d} meta={m}') for idx, d, m in mismatches[:5]]}"
+                f"{preview([(idx, f'data={d} meta={m}') for idx, d, m in mismatches], 5, dataset.no_aggregate)}"
             )
         else:
             result.pass_("All episode lengths match metadata")

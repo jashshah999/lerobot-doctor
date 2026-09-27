@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 from lerobot_doctor.dataset_loader import LoadedDataset
-from lerobot_doctor.runner import CheckResult, Severity
+from lerobot_doctor.runner import CheckResult, Severity, head, preview
 
 
 SKIP_COLUMNS = {"timestamp", "frame_index", "episode_index", "index", "task_index"}
@@ -153,10 +153,11 @@ def check_per_episode(dataset: LoadedDataset) -> CheckResult:
     result.warn(
         f"{len(flagged)}/{len(dataset.episodes_data)} episode(s) flagged"
     )
-    for ep_idx in sorted(flagged.keys())[:20]:
+    shown, hidden = head(sorted(flagged.keys()), 20, dataset.no_aggregate)
+    for ep_idx in shown:
         reasons = flagged[ep_idx]
         result.warn(f"Episode {ep_idx}: {'; '.join(reasons)}")
-    if len(flagged) > 20:
-        result.warn(f"...and {len(flagged) - 20} more flagged episodes")
+    if hidden:
+        result.warn(f"...and {hidden} more flagged episodes")
 
     return result

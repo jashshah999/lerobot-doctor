@@ -7,7 +7,7 @@ import json
 import numpy as np
 
 from lerobot_doctor.dataset_loader import LoadedDataset
-from lerobot_doctor.runner import CheckResult, Severity
+from lerobot_doctor.runner import CheckResult, Severity, preview
 
 SKIP_COLUMNS = {"timestamp", "frame_index", "episode_index", "index", "task_index"}
 # Binary/boolean columns where outlier detection doesn't make sense
@@ -138,4 +138,4 @@ def _check_stats_json(dataset: LoadedDataset, result: CheckResult):
         stats_features = set(stored.keys())
         missing_in_stats = data_cols - stats_features
         if missing_in_stats:
-            result.warn(f"Features in data but not in stats.json: {sorted(missing_in_stats)[:5]}")
+            result.warn(f"Features in data but not in stats.json: {preview(sorted(missing_in_stats), 5, dataset.no_aggregate)}")

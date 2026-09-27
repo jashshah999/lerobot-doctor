@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 from lerobot_doctor.dataset_loader import LoadedDataset
-from lerobot_doctor.runner import CheckResult, Severity
+from lerobot_doctor.runner import CheckResult, Severity, head
 
 # Default features that are not actions/observations
 SKIP_COLUMNS = {"timestamp", "frame_index", "episode_index", "index", "task_index"}
@@ -144,10 +144,11 @@ def _check_action_column(dataset: LoadedDataset, col_name: str, result: CheckRes
             frozen_episodes.append((ep.episode_index, pct))
 
     if frozen_episodes:
-        for ep_idx, pct in frozen_episodes[:5]:
+        shown, hidden = head(frozen_episodes, 5, dataset.no_aggregate)
+        for ep_idx, pct in shown:
             result.warn(f"{col_name}: {pct:.0f}% of episode {ep_idx} is consecutive identical actions (frozen)")
-        if len(frozen_episodes) > 5:
-            result.warn(f"{col_name}: ...and {len(frozen_episodes) - 5} more episodes with frozen actions")
+        if hidden:
+            result.warn(f"{col_name}: ...and {hidden} more episodes with frozen actions")
 
     # Action jumps: sudden large changes
     # Use GLOBAL std of diffs (not per-episode) for more stable threshold
@@ -185,10 +186,11 @@ def _check_action_column(dataset: LoadedDataset, col_name: str, result: CheckRes
                 jump_episodes.append((ep.episode_index, len(big_jumps)))
 
         if jump_episodes:
-            for ep_idx, n_jumps in jump_episodes[:5]:
+            shown, hidden = head(jump_episodes, 5, dataset.no_aggregate)
+            for ep_idx, n_jumps in shown:
                 result.warn(f"{col_name}: Episode {ep_idx} has {n_jumps} sudden large action jumps (>8 std mean across dims)")
-            if len(jump_episodes) > 5:
-                result.warn(f"{col_name}: ...and {len(jump_episodes) - 5} more episodes with large action jumps")
+            if hidden:
+                result.warn(f"{col_name}: ...and {hidden} more episodes with large action jumps")
 
 
 def _max_consecutive_true(arr: np.ndarray) -> int:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 from lerobot_doctor.dataset_loader import LoadedDataset
-from lerobot_doctor.runner import CheckResult, Severity
+from lerobot_doctor.runner import CheckResult, Severity, head, preview
 
 SKIP_COLUMNS = {"timestamp", "frame_index", "episode_index", "index", "task_index"}
 
@@ -116,7 +116,7 @@ def _check_near_duplicate_episodes(dataset: LoadedDataset, result: CheckResult):
     if duplicates:
         result.warn(
             f"{len(duplicates)} near-duplicate episode pair(s) detected: "
-            f"{duplicates[:5]}{'...' if len(duplicates) > 5 else ''}"
+            f"{preview(duplicates, 5, dataset.no_aggregate)}"
         )
 
 
@@ -215,7 +215,8 @@ def _check_constant_observations(dataset: LoadedDataset, result: CheckResult):
                     f"ALL episodes -- possible broken sensor or unused feature"
                 )
             elif len(constant_dims) > 0:
-                dims_str = ", ".join(f"dim {d} (={v:.4f})" for d, v in constant_dims[:5])
+                shown, hidden = head(constant_dims, 5, dataset.no_aggregate)
+                dims_str = ", ".join(f"dim {d} (={v:.4f})" for d, v in shown) + (", ..." if hidden else "")
                 result.warn(
                     f"{col_name}: {len(constant_dims)} constant dimension(s) across "
                     f"ALL episodes: {dims_str} -- possible stuck sensor"

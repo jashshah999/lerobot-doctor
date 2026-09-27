@@ -28,6 +28,9 @@ def main(argv: list[str] | None = None):
                          help="URDF file to check actions against for the kinematics check "
                               "(otherwise looked up from robot_type in a small built-in registry)")
     check_p.add_argument("--json", action="store_true", dest="json_output")
+    check_p.add_argument("--no-aggregate", action="store_true",
+                         help="List every flagged episode/file instead of truncating long lists "
+                              "into '...and N more' (useful with --json)")
     check_p.add_argument("-v", "--verbose", action="store_true")
     check_p.add_argument("--ci", action="store_true")
     check_p.add_argument("--fail-on", choices=["warn", "fail"], default="fail")
@@ -118,6 +121,7 @@ def _run_check(args):
     if args.urdf:
         from pathlib import Path
         dataset.robot_urdf = Path(args.urdf)
+    dataset.no_aggregate = args.no_aggregate
 
     report = run_checks(dataset, checks=check_names, verbose=args.verbose)
 

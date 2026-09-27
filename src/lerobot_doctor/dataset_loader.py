@@ -61,6 +61,7 @@ class LoadedDataset:
     is_local: bool = True
     max_episodes_applied: int | None = None  # set when user passed --max-episodes
     robot_urdf: Path | None = None  # set when user passed --urdf, for check_kinematics
+    no_aggregate: bool = False  # set when user passed --no-aggregate: list every flagged item
     archive_path: Path | None = None
     archive_inner_root: str | None = None
     _temp_dir: Any | None = field(default=None, repr=False, compare=False)

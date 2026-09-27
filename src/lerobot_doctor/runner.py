@@ -37,6 +37,22 @@ def _get_all_checks():
     }
 
 
+def preview(items, limit: int, full: bool = False) -> str:
+    """Render a list for a message, truncated to ``limit`` items unless ``full``."""
+    items = list(items)
+    if full or len(items) <= limit:
+        return str(items)
+    return f"{items[:limit]}..."
+
+
+def head(items, limit: int, full: bool = False) -> tuple[list, int]:
+    """Split a list into the items to report and the count left out."""
+    items = list(items)
+    if full or len(items) <= limit:
+        return items, 0
+    return items[:limit], len(items) - limit
+
+
 class Severity(Enum):
     PASS = "PASS"
     WARN = "WARN"
