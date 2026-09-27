@@ -212,6 +212,25 @@ lerobot-doctor score /path/to/dataset --json     # JSON for automation
 
 Scores: smoothness, coverage, consistency, length. Recommends which episodes to drop.
 
+## Explore (locate outliers)
+
+`check` says *that* a feature has extreme outliers; `explore outliers` says *where*: episode, frame, value and z-score for every one.
+
+```bash
+lerobot-doctor explore outliers /path/to/dataset                                    # action, |z| > 10
+lerobot-doctor explore outliers lerobot/aloha_mobile_shrimp --features observation.effort --top 10
+lerobot-doctor explore outliers /path/to/dataset --features action,observation.state --threshold 5 --json
+```
+
+With `--visualize`, each outlier frame is saved as a strip of video frames around it (local datasets, v2 and v3):
+
+```bash
+pip install "lerobot-doctor[viz]"   # adds opencv-python-headless
+lerobot-doctor explore outliers /path/to/dataset --visualize --context-frames 3 --camera observation.images.wrist
+```
+
+Images go to `./explore_outliers/<feature>/` (`--output-dir` to change). NaN/inf values are excluded from the statistics and counted in the report.
+
 ## Gate (pre-training check)
 
 ```bash

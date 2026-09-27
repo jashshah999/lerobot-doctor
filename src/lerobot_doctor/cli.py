@@ -70,9 +70,8 @@ def main(argv: list[str] | None = None):
 
     # === EXPLORE ===
     explore_p = subparsers.add_parser("explore", help="Data exploration & diagnostics")
-    explore_p.add_argument("exploration", choices=["outliers"],
-                           help="Type of exploration: outliers, clipping, distribution (coming soon)")
-    explore_p.add_argument("dataset", help="Path to local dataset")
+    explore_p.add_argument("exploration", choices=["outliers"], help="Type of exploration")
+    explore_p.add_argument("dataset", help="Path to local dataset, .zip archive, or HF repo_id")
     explore_p.add_argument("--features", type=str, default="action",
                            help="Comma-separated feature column name(s), e.g. 'action' or 'action,observation.state' (default: action)")
     explore_p.add_argument("--threshold", type=float, default=10.0,
@@ -84,8 +83,10 @@ def main(argv: list[str] | None = None):
     explore_p.add_argument("--json", action="store_true", dest="json_output")
     explore_p.add_argument("--visualize", action="store_true",
                            help="Generate visualization images for outlier frames (requires video files)")
-    explore_p.add_argument("--output-dir", type=str, default=None, metavar="PATH",
-                           help="Directory to save visualization images (default: <dataset>/explore_outliers/)")
+    explore_p.add_argument("--camera", type=str, default=None,
+                           help="Video feature to visualize (default: first video feature)")
+    explore_p.add_argument("--output-dir", type=str, default="explore_outliers", metavar="PATH",
+                           help="Directory to save visualization images (default: ./explore_outliers/)")
     explore_p.add_argument("--context-frames", type=int, default=2,
                            help="Number of frames before/after the outlier frame in visualization (default: 2)")
     explore_p.add_argument("--open", action="store_true",
@@ -266,7 +267,7 @@ def _run_merge_check(args):
         sys.exit(1)
 
 
-def _open_images(image_paths: list[Path]):
+def _open_images(image_paths: list):
     """Display images using cv2.imshow (cross-platform), fallback to system open."""
     import subprocess
 
@@ -275,7 +276,7 @@ def _open_images(image_paths: list[Path]):
     try:
         import cv2
         if hasattr(cv2, "imshow"):
-            print("  Press any key → next image, 'q' → quit")
+            print("  Press any key -> next image, 'q' -> quit", file=sys.stderr)
             for p in image_paths:
                 img = cv2.imread(str(p))
                 if img is None:
@@ -304,71 +305,56 @@ def _open_images(image_paths: list[Path]):
 
 def _run_explore(args):
     from pathlib import Path
-    from lerobot_doctor.explore.outliers import find_outliers, format_outlier_report
+    from lerobot_doctor.explore.outliers import find_outliers, format_outlier_report, visualize_outliers
 
-    # Parse --features: comma-separated list, default "action"
-    feature_names = [f.strip() for f in args.features.split(",") if f.strip()]
-    if not feature_names:
-        feature_names = ["action"]
+    feature_names = [f.strip() for f in args.features.split(",") if f.strip()] or ["action"]
+    dataset = _load_dataset_or_exit(args.dataset, max_episodes=args.max_episodes)
 
-    root = Path(args.dataset)
-    if not root.is_dir():
-        print(f"Error: dataset path does not exist or is not a directory: {root}", file=sys.stderr)
-        sys.exit(1)
+    results = []
+    for feat in feature_names:
+        try:
+            results.append(find_outliers(dataset, feature=feat, threshold=args.threshold))
+        except ValueError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
 
-    if args.exploration == "outliers":
-        from lerobot_doctor.explore.outliers import find_outliers, format_outlier_report, visualize_outliers
-
-        for feat in feature_names:
-            result = find_outliers(
-                root,
-                feature=feat,
-                threshold=args.threshold,
-                max_episodes=args.max_episodes,
-            )
-
-            if args.json_output:
-                import json as _json
-                out = {
-                    "feature": result.feature_name,
-                    "n_dims": result.n_dims,
-                    "total_frames": result.total_frames,
-                    "threshold": result.threshold,
-                    "mean_per_dim": [round(m, 6) for m in result.mean_per_dim],
-                    "std_per_dim": [round(s, 6) for s in result.std_per_dim],
-                    "outliers": [o.as_dict() for o in result.outliers],
-                }
-                if len(feature_names) > 1:
-                    print(f"# --- {feat} ---")
-                print(_json.dumps(out, indent=2))
-            else:
-                if len(feature_names) > 1:
-                    print(f"\n{'='*80}")
-                print(format_outlier_report(result, top=args.top))
-
-            if args.visualize and result.outliers:
-                out_dir = Path(args.output_dir) if args.output_dir else root / "explore_outliers"
-                # Per-feature subdir to avoid collisions
-                viz_dir = out_dir / feat.replace(".", "_")
-                print(f"\nGenerating visualizations → {viz_dir}")
-                try:
-                    saved = visualize_outliers(
-                        root, result, viz_dir,
-                        context_frames=args.context_frames,
-                        top=args.top,
-                    )
-                    print(f"  {len(saved)} image(s) saved")
-
-                    if args.open and saved:
-                        _open_images(saved)
-                        print(f"  [OPEN] {len(saved)} image(s) displayed")
-                except ImportError as e:
-                    print(f"  [ERROR] {e}", file=sys.stderr)
-                except Exception as e:
-                    print(f"  [ERROR] {e}", file=sys.stderr)
+    if args.json_output:
+        print(json_module.dumps({
+            "dataset_path": dataset.display_path or str(dataset.root),
+            "results": [r.as_dict(top=args.top) for r in results],
+        }, indent=2))
     else:
-        print(f"Error: unknown exploration type '{args.exploration}'", file=sys.stderr)
+        for i, result in enumerate(results):
+            if i:
+                print(f"\n{'=' * 80}")
+            print(format_outlier_report(result, top=args.top))
+
+    if not args.visualize:
+        return
+    if not dataset.is_local:
+        print("Error: --visualize needs the videos; download the dataset and pass its local path",
+              file=sys.stderr)
         sys.exit(1)
+
+    # Progress goes to stderr so --json stdout stays parseable.
+    for result in results:
+        if not result.outliers:
+            continue
+        viz_dir = Path(args.output_dir) / result.feature_name.replace(".", "_")
+        print(f"\nGenerating visualizations -> {viz_dir}", file=sys.stderr)
+        try:
+            saved = visualize_outliers(
+                dataset, result, viz_dir,
+                video_key=args.camera,
+                context_frames=args.context_frames,
+                top=args.top,
+            )
+        except (ImportError, ValueError) as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
+        print(f"  {len(saved)} image(s) saved", file=sys.stderr)
+        if args.open and saved:
+            _open_images(saved)
 
 
 if __name__ == "__main__":

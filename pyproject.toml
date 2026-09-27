@@ -20,6 +20,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0", "pytest-tmp-files>=0.0.2"]
+viz = ["opencv-python-headless>=4.5"]
 
 [project.scripts]
 lerobot-doctor = "lerobot_doctor.cli:main"
