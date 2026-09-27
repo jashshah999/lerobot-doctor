@@ -81,3 +81,29 @@ def test_stuck_actuator(tmp_path):
     result = check_anomalies(ds)
     assert any("stuck" in m.message.lower() or "static" in m.message.lower()
                for m in result.messages)
+
+
+def test_stuck_actuator_found_after_many_partially_stuck_dims(tmp_path):
+    n_eps, n_frames, dims = 5, 30, 8
+    root = create_dataset(tmp_path / "dataset", n_episodes=n_eps, n_frames_per_ep=n_frames, fps=10, action_dims=dims)
+    rng = np.random.default_rng(0)
+    for i in range(n_eps):
+        data_file = root / "data" / "chunk-000" / f"file-{i:03d}.parquet"
+        table = pq.read_table(data_file)
+        actions = rng.standard_normal((n_frames, dims))
+        # Dim 7 is stuck in every episode (a single step, otherwise flat).
+        actions[:, 7] = 0.0
+        actions[-1, 7] = 1.0
+        if i == 0:
+            # Dims 0-5 are mostly static in episode 0 only: normal, must not warn,
+            # but they are grouped before dim 7.
+            actions[:, :6] = 0.0
+            actions[-1, :6] = 1.0
+        table = table.set_column(
+            table.column_names.index("action"), "action", pa.array(actions.tolist())
+        )
+        pq.write_table(table, data_file)
+    ds = load_local(root)
+    result = check_anomalies(ds)
+    stuck = [m.message for m in result.messages if "stuck/static" in m.message]
+    assert stuck == [f"action[7]: stuck/static in {n_eps}/{n_eps} episodes (>80% unchanged each) -- possible stuck actuator or unused DOF"]

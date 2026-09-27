@@ -62,7 +62,7 @@ def _check_stuck_actuators(dataset: LoadedDataset, result: CheckResult):
                 by_col_dim[key] = []
             by_col_dim[key].append(ep_idx)
 
-        for (col, dim), episodes in list(by_col_dim.items())[:5]:
+        for (col, dim), episodes in by_col_dim.items():
             # Only warn if stuck in >80% of ALL episodes (not just 30%)
             # because gripper DOFs being mostly static in some episodes is normal
             if len(episodes) > len(dataset.episodes_data) * 0.8:
